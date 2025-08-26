@@ -4,7 +4,6 @@ import os
 from datetime import date, datetime
 from PIL import Image
 import numpy as np
-import qrcode
 from io import BytesIO
 import time
 import plotly.express as px
@@ -1091,6 +1090,7 @@ class StudentAttendanceSystem:
 
 if __name__ == "__main__":
     system = StudentAttendanceSystem()
+
 
 
 
