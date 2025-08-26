@@ -4,7 +4,6 @@ import os
 from datetime import date, datetime
 from PIL import Image
 import numpy as np
-import cv2
 import qrcode
 from io import BytesIO
 import time
@@ -24,9 +23,12 @@ class StudentAttendanceSystem:
             'مارس_2026', 'أبريل_2026', 'مايو_2026', 'يونيو_2026'
         ]
         
+        # تعريف current_group قبل تحميل البيانات
+        self.current_group = None
+        
         # تهيئة اتصال Google Sheets
         self.init_google_sheets()
-        self.current_group = "المجموعة_الافتراضية"
+        
         # تحميل البيانات أولاً قبل إعداد الواجهة
         self.load_data()
         self.setup_ui()
@@ -39,27 +41,35 @@ class StudentAttendanceSystem:
                     "https://www.googleapis.com/auth/drive",
                     "https://www.googleapis.com/auth/spreadsheets"]
             
-            # تحميل credentials (يجب تعديل المسار ليتناسب مع نظامك)
-            creds_path = r"C:\Users\zbook 17 g3\Desktop\chromatic-theme-470014-a7-1dcc78299d05.json"
+            # استخدام Streamlit secrets للبيانات الحساسة
+            creds_dict = {
+                "type": "service_account",
+                "project_id": st.secrets["GOOGLE_PROJECT_ID"],
+                "private_key_id": st.secrets["GOOGLE_PRIVATE_KEY_ID"],
+                "private_key": st.secrets["GOOGLE_PRIVATE_KEY"],
+                "client_email": st.secrets["GOOGLE_CLIENT_EMAIL"],
+                "client_id": st.secrets["GOOGLE_CLIENT_ID"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "client_x509_cert_url": st.secrets["GOOGLE_CLIENT_X509_CERT_URL"]
+            }
             
-            if os.path.exists(creds_path):
-                creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
-                self.client = gspread.authorize(creds)
-                
-                # ID الشيت من الرابط
-                self.SHEET_ID = "1tna1xqoBN3WBv7LJvCblyGUrozcA2FkMvk-VoT6UHic"
-                
-                # فتح الشيت الرئيسي
-                try:
-                    self.spreadsheet = self.client.open_by_key(self.SHEET_ID)
-                except gspread.SpreadsheetNotFound:
-                    st.error("لم يتم العثور على جدول البيانات. تأكد من ID الصحيح.")
-                    return
-                
-                print("تم الاتصال بـ Google Sheets بنجاح")
-            else:
-                st.error("ملف الاعتماد غير موجود. تأكد من المسار الصحيح.")
-                
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            self.client = gspread.authorize(creds)
+            
+            # ID الشيت من secrets
+            self.SHEET_ID = st.secrets["SHEET_ID"]
+            
+            # فتح الشيت الرئيسي
+            try:
+                self.spreadsheet = self.client.open_by_key(self.SHEET_ID)
+            except gspread.SpreadsheetNotFound:
+                st.error("لم يتم العثور على جدول البيانات. تأكد من ID الصحيح.")
+                return
+            
+            st.success("تم الاتصال بـ Google Sheets بنجاح")
+            
         except Exception as e:
             st.error(f"خطأ في الاتصال بـ Google Sheets: {str(e)}")
     
@@ -85,7 +95,8 @@ class StudentAttendanceSystem:
                             df = pd.DataFrame(records)
                             
                             # تصحيح الأعمدة إذا كان هناك خطأ إملائي
-                            
+                            if 'رقم_الهاتf' in df.columns and 'رقم_الهاتف' not in df.columns:
+                                df.rename(columns={'رقم_الهاتf': 'رقم_الهاتف'}, inplace=True)
                             
                             # إضافة الأعمدة المفقودة
                             required_columns = [
@@ -135,7 +146,7 @@ class StudentAttendanceSystem:
                             self.groups_df[sheet_name] = pd.DataFrame(columns=required_columns)
                             
                     except Exception as e:
-                        print(f"خطأ في تحميل ورقة {sheet_name}: {str(e)}")
+                        st.error(f"خطأ في تحميل ورقة {sheet_name}: {str(e)}")
                         continue
             
             # إذا لم توجد أوراق، إنشاء مجموعة افتراضية
@@ -146,10 +157,9 @@ class StudentAttendanceSystem:
                 if self.current_group is None or self.current_group not in self.groups_df:
                     self.current_group = list(self.groups_df.keys())[0]
                 
-                print(f"تم تحميل البيانات بنجاح. عدد المجموعات: {len(self.groups_df)}")
+                st.success(f"تم تحميل البيانات بنجاح. عدد المجموعات: {len(self.groups_df)}")
                 
         except Exception as e:
-            print(f"حدث خطأ في تحميل البيانات: {str(e)}")
             st.error(f"حدث خطأ في تحميل البيانات: {str(e)}")
             self.initialize_default_group()
 
@@ -168,16 +178,23 @@ class StudentAttendanceSystem:
         
         # حفظ الملف فوراً
         self.save_data()
-        print("تم إنشاء مجموعة افتراضية جديدة")
+        st.info("تم إنشاء مجموعة افتراضية جديدة")
     
-    def save_data(self):
+    def save_data(self, group_name=None):
         """حفظ البيانات في Google Sheets"""
         try:
             # الحصول على الأوراق الحالية
             current_sheets = self.spreadsheet.worksheets()
             current_sheet_names = [ws.title for ws in current_sheets]
             
-            for group_name, df in self.groups_df.items():
+            # إذا تم تحديد مجموعة معينة، احفظها فقط
+            groups_to_save = [group_name] if group_name else self.groups_df.keys()
+            
+            for group_name in groups_to_save:
+                if group_name not in self.groups_df:
+                    continue
+                    
+                df = self.groups_df[group_name]
                 # إنشاء نسخة للحفظ
                 df_to_save = df.copy()
                 
@@ -203,16 +220,14 @@ class StudentAttendanceSystem:
                 # تحديث البيانات
                 worksheet.update('A1', data_to_save)
                 
-                print(f"تم حفظ بيانات المجموعة {group_name} بنجاح")
+                st.success(f"تم حفظ بيانات المجموعة {group_name} بنجاح")
             
-            print("تم حفظ جميع البيانات بنجاح في Google Sheets")
+            st.success("تم حفظ جميع البيانات بنجاح في Google Sheets")
             
         except Exception as e:
-            print(f"خطأ في حفظ البيانات: {str(e)}")
             st.error(f"خطأ في حفظ البيانات: {str(e)}")
     
     def setup_ui(self):
-        # ... (نفس كود setup_ui السابق بدون تغيير)
         st.markdown("""
         <style>
             .stApp {
@@ -286,9 +301,6 @@ class StudentAttendanceSystem:
         
         st.title("🎓 نظام حضور الطلاب")
         
-        # عرض حالة آخر حفظ
-        st.info("📁 البيانات متصلة بـ Google Sheets - يتم الحفظ تلقائياً")
-        
         # إدارة المجموعات في الشريط الجانبي
         with st.sidebar:
             st.header("إدارة المجموعات")
@@ -342,6 +354,11 @@ class StudentAttendanceSystem:
             if st.button("💾 حفظ البيانات يدوياً"):
                 self.save_data()
                 st.success("تم حفظ البيانات!")
+                
+            # زر تحديث البيانات
+            if st.button("🔄 تحديث البيانات من الخادم"):
+                self.load_data()
+                st.success("تم تحديث البيانات!")
         
         # تبويبات الواجهة الرئيسية
         tabs = st.tabs(["📷 مسح حضور الطالب", "➕ تسجيل طالب جديد", "🔄 إدارة الطلاب", "📊 الإحصائيات"])
@@ -355,7 +372,6 @@ class StudentAttendanceSystem:
         with tabs[3]:
             self.view_analytics_tab()
     
-    # ... (بقية الدوال تبقى كما هي بدون تغيير)
     def scan_qr_tab(self):
         if self.current_group not in self.groups_df:
             st.warning("الرجاء اختيار مجموعة صالحة")
@@ -364,34 +380,19 @@ class StudentAttendanceSystem:
         st.header(f"📷 تسجيل حضور الطالب - مجموعة {self.current_group}")
         welcome_placeholder = st.empty()
         
-        # استخدام session state لتجنب المعالجة المكررة للصورة
-        if 'last_processed_image' not in st.session_state:
-            st.session_state.last_processed_image = None
+        # خيار إدخال الكود يدوياً (بديل عن المسح)
+        student_code = st.text_input("أدخل كود الطالب يدوياً:", key="manual_code_input")
         
-        img_file = st.camera_input("امسح كود الطالب", key="qr_scanner")
+        if st.button("تسجيل الحضور") and student_code:
+            self.process_student_attendance(student_code.strip(), welcome_placeholder)
         
-        # إذا كانت هناك صورة جديدة ولم يتم معالجتها من قبل
-        if img_file is not None and img_file != st.session_state.last_processed_image:
-            st.session_state.last_processed_image = img_file
-            
-            try:
-                img = Image.open(img_file)
-                frame = np.array(img)
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                detector = cv2.QRCodeDetector()
-                data, vertices, _ = detector.detectAndDecode(gray)
-                
-                if data:
-                    self.process_student_attendance(data.strip(), welcome_placeholder)
-                else:
-                    st.warning("لم يتم التعرف على كود الطالب، حاول مرة أخرى")
-            except Exception as e:
-                st.error(f"خطأ في المسح: {str(e)}")
-        
-        # زر لمسح الصورة يدوياً إذا احتجنا
-        if st.button("🗑️ مسح الصورة والبدء من جديد"):
-            st.session_state.last_processed_image = None
-            st.rerun()
+        # عرض قائمة الطلاب للمساعدة
+        st.subheader("قائمة الطلاب")
+        df = self.groups_df[self.current_group]
+        if not df.empty:
+            student_list = df[['الكود', 'الاسم']].values.tolist()
+            for code, name in student_list:
+                st.write(f"**{code}**: {name}")
     
     def process_student_attendance(self, student_id, welcome_placeholder):
         # البحث عن الطالب في جميع المجموعات
@@ -409,32 +410,22 @@ class StudentAttendanceSystem:
                 break
         
         if student_found:
-            # التحقق من عدم تكرار تسجيل الحضور لنفس الصورة
-            if f'last_attendance_{student_id}' not in st.session_state:
-                st.session_state[f'last_attendance_{student_id}'] = None
+            # تحديث عدد الحصص
+            self.groups_df[student_group].loc[student_index, 'الحصص_الحاضرة'] += 1
             
-            if st.session_state[f'last_attendance_{student_id}'] != st.session_state.last_processed_image:
-                # تحديث عدد الحصص
-                self.groups_df[student_group].loc[student_index, 'الحصص_الحاضرة'] += 1
+            # تسجيل تاريخ الحضور
+            current_date = date.today().strftime("%Y-%m-%d")
+            current_presence = student_row['تواريخ_الحضور']
+            
+            if pd.isna(current_presence) or current_presence == '' or current_presence == 'nan':
+                new_presence = current_date
+            else:
+                new_presence = f"{current_presence}; {current_date}"
                 
-                # تسجيل تاريخ الحضور
-                current_date = date.today().strftime("%Y-%m-%d")
-                current_presence = student_row['تواريخ_الحضور']
-                
-                if pd.isna(current_presence) or current_presence == '' or current_presence == 'nan':
-                    new_presence = current_date
-                else:
-                    new_presence = f"{current_presence}; {current_date}"
-                    
-                self.groups_df[student_group].loc[student_index, 'تواريخ_الحضور'] = new_presence
-                
-                # حفظ البيانات فوراً
-                self.save_data()
-                
-                # تسجيل أن هذه الصورة تم معالجتها
-                st.session_state[f'last_attendance_{student_id}'] = st.session_state.last_processed_image
-                
-                print(f"تم تسجيل حضور للطالب {student_id} في المجموعة {student_group}")
+            self.groups_df[student_group].loc[student_index, 'تواريخ_الحضور'] = new_presence
+            
+            # حفظ البيانات للمجموعة المحددة فقط
+            self.save_data(group_name=student_group)
             
             # إعادة قراءة البيانات المحدثة
             updated_student_row = self.groups_df[student_group].loc[student_index]
@@ -489,18 +480,10 @@ class StudentAttendanceSystem:
                         st.markdown(f"- الحصة {i}: {date_str}")
                 st.markdown('</div>', unsafe_allow_html=True)
             
-            # عرض نتائج الاختبارات
-            if pd.notna(updated_student_row['الاختبارات']) and updated_student_row['الاختبارات'] != '' and updated_student_row['الاختبارات'] != 'nan':
-                st.markdown("### نتائج الاختبارات")
-                tests = str(updated_student_row['الاختبارات']).split(';')
-                for test in tests:
-                    test = test.strip()
-                    if test and test != 'nan':
-                        st.markdown(f"- {test}")
-            
             st.markdown('</div>', unsafe_allow_html=True)
         else:
             welcome_placeholder.error("❌ كود الطالب غير مسجل في النظام")
+    
     
     def create_student_tab(self):
         st.header(f"➕ تسجيل طالب جديد")
@@ -1079,6 +1062,7 @@ class StudentAttendanceSystem:
 
 if __name__ == "__main__":
     system = StudentAttendanceSystem()
+
 
 
 
