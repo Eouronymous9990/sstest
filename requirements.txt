@@ -1,4 +1,6 @@
 streamlit>=1.22.0
+opencv-python-headless
+
 pandas>=1.5.0
 python-dateutil>=2.8.2
 qrcode[pil]>=7.4.2
@@ -11,3 +13,4 @@ google-auth>=2.17.0
 google-auth-oauthlib>=1.0.0
 google-auth-httplib2>=0.1.0
 pyzbar>=0.1.9  # بديل عن OpenCV لقراءة QR codes
+
