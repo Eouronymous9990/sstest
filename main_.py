@@ -4,13 +4,14 @@ import os
 from datetime import date, datetime
 from PIL import Image
 import numpy as np
+import cv2
+import qrcode
 from io import BytesIO
 import time
 import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 from oauth2client.service_account import ServiceAccountCredentials
-from pyzbar.pyzbar import decode  # استبدال OpenCV بـ pyzbar
 
 class StudentAttendanceSystem:
     def __init__(self):
@@ -23,12 +24,9 @@ class StudentAttendanceSystem:
             'مارس_2026', 'أبريل_2026', 'مايو_2026', 'يونيو_2026'
         ]
         
-        # تعريف current_group قبل تحميل البيانات
-        self.current_group = None
-        
         # تهيئة اتصال Google Sheets
         self.init_google_sheets()
-        
+        self.current_group = "المجموعة_الافتراضية"
         # تحميل البيانات أولاً قبل إعداد الواجهة
         self.load_data()
         self.setup_ui()
@@ -41,35 +39,27 @@ class StudentAttendanceSystem:
                     "https://www.googleapis.com/auth/drive",
                     "https://www.googleapis.com/auth/spreadsheets"]
             
-            # استخدام ملف الاعتماد كقاموس بدلاً من مسار الملف
-            creds_dict = {
-                "type": "service_account",
-                "project_id": "chromatic-theme-470014-a7",
-                "private_key_id": "1dcc78299d05",
-                "private_key": st.secrets["GOOGLE_PRIVATE_KEY"],
-                "client_email": st.secrets["GOOGLE_CLIENT_EMAIL"],
-                "client_id": st.secrets["GOOGLE_CLIENT_ID"],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "client_x509_cert_url": st.secrets["GOOGLE_CLIENT_X509_CERT_URL"]
-            }
+            # تحميل credentials (يجب تعديل المسار ليتناسب مع نظامك)
+            creds_path = r"C:\Users\zbook 17 g3\Desktop\chromatic-theme-470014-a7-1dcc78299d05.json"
             
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-            self.client = gspread.authorize(creds)
-            
-            # ID الشيت من الرابط
-            self.SHEET_ID = st.secrets["SHEET_ID"]
-            
-            # فتح الشيت الرئيسي
-            try:
-                self.spreadsheet = self.client.open_by_key(self.SHEET_ID)
-            except gspread.SpreadsheetNotFound:
-                st.error("لم يتم العثور على جدول البيانات. تأكد من ID الصحيح.")
-                return
-            
-            print("تم الاتصال بـ Google Sheets بنجاح")
-            
+            if os.path.exists(creds_path):
+                creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
+                self.client = gspread.authorize(creds)
+                
+                # ID الشيت من الرابط
+                self.SHEET_ID = "1tna1xqoBN3WBv7LJvCblyGUrozcA2FkMvk-VoT6UHic"
+                
+                # فتح الشيت الرئيسي
+                try:
+                    self.spreadsheet = self.client.open_by_key(self.SHEET_ID)
+                except gspread.SpreadsheetNotFound:
+                    st.error("لم يتم العثور على جدول البيانات. تأكد من ID الصحيح.")
+                    return
+                
+                print("تم الاتصال بـ Google Sheets بنجاح")
+            else:
+                st.error("ملف الاعتماد غير موجود. تأكد من المسار الصحيح.")
+                
         except Exception as e:
             st.error(f"خطأ في الاتصال بـ Google Sheets: {str(e)}")
     
@@ -386,16 +376,15 @@ class StudentAttendanceSystem:
             
             try:
                 img = Image.open(img_file)
+                frame = np.array(img)
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                detector = cv2.QRCodeDetector()
+                data, vertices, _ = detector.detectAndDecode(gray)
                 
-                # استخدام pyzbar بدلاً من OpenCV لقراءة QR code
-                decoded_objects = decode(img)
-                
-                if decoded_objects:
-                    data = decoded_objects[0].data.decode('utf-8')
+                if data:
                     self.process_student_attendance(data.strip(), welcome_placeholder)
                 else:
                     st.warning("لم يتم التعرف على كود الطالب، حاول مرة أخرى")
-                    
             except Exception as e:
                 st.error(f"خطأ في المسح: {str(e)}")
         
